@@ -3,17 +3,33 @@ package cache
 import (
 	"fmt"
 	"log"
+	"os"
 	"sync"
 
 	"github.com/AliyunContainerService/gpushare-scheduler-extender/pkg/utils"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
 const (
 	OptimisticLockErrorMsg = "the object has been modified; please apply your changes to the latest version and try again"
+
+	ScheduleStrategySpread  = "spread"
+	ScheduleStrategyBinpack = "binpack"
 )
+
+var ScheduleStrategy string
+
+func init() {
+	strategy := os.Getenv("NODE_GPU_DEVS_SCHEDULE_STRATEGY")
+	switch strategy {
+	case ScheduleStrategySpread:
+		ScheduleStrategy = ScheduleStrategySpread
+	default:
+		ScheduleStrategy = ScheduleStrategyBinpack
+	}
+}
 
 // NodeInfo is node level aggregated information.
 type NodeInfo struct {
@@ -222,15 +238,18 @@ func (n *NodeInfo) allocateGPUID(pod *v1.Pod) (candidateDevID int, found bool) {
 		if len(availableGPUs) > 0 {
 			for devID := 0; devID < len(n.devs); devID++ {
 				availableGPU, ok := availableGPUs[devID]
-				if ok {
-					if availableGPU >= reqGPU {
-						if candidateDevID == -1 || candidateGPUMemory > availableGPU {
-							candidateDevID = devID
-							candidateGPUMemory = availableGPU
-						}
-
-						found = true
+				if !ok {
+					continue
+				}
+				if availableGPU >= reqGPU {
+					if candidateDevID == -1 ||
+						(ScheduleStrategy == ScheduleStrategyBinpack && candidateGPUMemory > availableGPU) ||
+						(ScheduleStrategy == ScheduleStrategySpread && candidateGPUMemory < availableGPU) {
+						candidateDevID = devID
+						candidateGPUMemory = availableGPU
 					}
+
+					found = true
 				}
 			}
 		}
